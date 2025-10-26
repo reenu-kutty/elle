@@ -1,8 +1,8 @@
-import ytdl from '@distube/ytdl-core';
 import { Outfit, OutfitPiece } from './types';
 
 const REKA_API_KEY = process.env.REKA_API_KEY || '';
-const REKA_BASE_URL = 'https://api.reka.ai/v1';
+const REKA_CHAT_URL = 'https://api.reka.ai/v1';
+const REKA_VISION_URL = 'https://vision-agent.api.reka.ai';
 
 interface RekaVisionAnalysisResponse {
   outfits: Array<{
@@ -16,47 +16,50 @@ interface RekaVisionAnalysisResponse {
 }
 
 /**
- * Downloads a YouTube video and returns it as a buffer
+ * Uploads a YouTube video URL directly to Reka Vision Agent API
  */
-export async function downloadYouTubeVideo(youtubeUrl: string): Promise<Buffer> {
+export async function uploadVideoToReka(youtubeUrl: string): Promise<string> {
   try {
-    const info = await ytdl.getInfo(youtubeUrl);
+    const formData = new URLSearchParams();
+    formData.append('video_url', youtubeUrl);
+    formData.append('video_name', 'youtube_video.mp4');
+    formData.append('index', 'true');
 
-    // Get video format with audio (prefer mp4 with medium quality)
-    const format = ytdl.chooseFormat(info.formats, {
-      quality: 'highestvideo',
-      filter: 'videoandaudio'
+    const response = await fetch(`${REKA_VISION_URL}/videos/upload`, {
+      method: 'POST',
+      headers: {
+        'X-Api-Key': REKA_API_KEY,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: formData.toString(),
     });
 
-    const videoStream = ytdl(youtubeUrl, { format });
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Reka upload error:', errorText);
+      throw new Error(`Failed to upload video to Reka: ${response.status} ${response.statusText}`);
+    }
 
-    // Convert stream to buffer
-    const chunks: Buffer[] = [];
+    const data = await response.json();
+    console.log('Reka upload response:', data);
 
-    return new Promise((resolve, reject) => {
-      videoStream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-      videoStream.on('end', () => resolve(Buffer.concat(chunks)));
-      videoStream.on('error', reject);
-    });
+    // The response should contain a video_id
+    if (!data.video_id) {
+      throw new Error('No video_id returned from Reka upload');
+    }
+
+    return data.video_id;
   } catch (error) {
-    console.error('Error downloading YouTube video:', error);
-    throw new Error('Failed to download video from YouTube');
+    console.error('Error uploading to Reka:', error);
+    throw error;
   }
-}
-
-/**
- * Converts a video buffer to a base64 data URL for Reka API
- */
-export function convertVideoToDataUrl(videoBuffer: Buffer): string {
-  const base64Video = videoBuffer.toString('base64');
-  return `data:video/mp4;base64,${base64Video}`;
 }
 
 /**
  * Analyzes a video using Reka's Vision API to identify outfits
  */
 export async function analyzeOutfitsWithRekaVision(
-  videoDataUrl: string,
+  videoId: string,
   characterName: string
 ): Promise<Outfit[]> {
   try {
@@ -83,11 +86,11 @@ export async function analyzeOutfitsWithRekaVision(
       ]
     }`;
 
-    const response = await fetch(`${REKA_BASE_URL}/chat`, {
+    const response = await fetch(`${REKA_CHAT_URL}/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${REKA_API_KEY}`,
+        'X-Api-Key': REKA_API_KEY,
       },
       body: JSON.stringify({
         model: 'reka-core',
@@ -96,8 +99,8 @@ export async function analyzeOutfitsWithRekaVision(
             role: 'user',
             content: [
               {
-                type: 'video_url',
-                video_url: videoDataUrl,
+                type: 'video_id',
+                video_id: videoId,
               },
               {
                 type: 'text',
@@ -158,11 +161,11 @@ export async function findShoppingLinksWithRekaResearch(
         try {
           const searchQuery = `Shop for ${piece.name}: ${piece.description}`;
 
-          const response = await fetch(`${REKA_BASE_URL}/chat`, {
+          const response = await fetch(`${REKA_CHAT_URL}/chat`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': `Bearer ${REKA_API_KEY}`,
+              'X-Api-Key': REKA_API_KEY,
             },
             body: JSON.stringify({
               model: 'reka-core',
@@ -224,14 +227,11 @@ export async function processVideoForOutfits(
   youtubeUrl: string,
   characterName: string
 ): Promise<Outfit[]> {
-  console.log('Downloading video from YouTube...');
-  const videoBuffer = await downloadYouTubeVideo(youtubeUrl);
-
-  console.log('Converting video to data URL for Reka...');
-  const videoDataUrl = convertVideoToDataUrl(videoBuffer);
+  console.log('Uploading YouTube URL to Reka Vision Agent...');
+  const videoId = await uploadVideoToReka(youtubeUrl);
 
   console.log('Analyzing outfits with Reka Vision...');
-  const outfits = await analyzeOutfitsWithRekaVision(videoDataUrl, characterName);
+  const outfits = await analyzeOutfitsWithRekaVision(videoId, characterName);
 
   console.log('Finding shopping links with Reka Research...');
   const outfitsWithLinks = await Promise.all(

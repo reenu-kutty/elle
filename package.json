@@ -10,8 +10,6 @@
     "postinstall": "node fix-swc.js || true"
   },
   "dependencies": {
-    "@distube/ytdl-core": "^4.16.12",
-    "form-data": "^4.0.4",
     "next": "16.0.0",
     "react": "19.2.0",
     "react-dom": "19.2.0"
