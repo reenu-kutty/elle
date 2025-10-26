@@ -1,15 +1,8 @@
 import ytdl from '@distube/ytdl-core';
-import FormData from 'form-data';
-import { Readable } from 'stream';
 import { Outfit, OutfitPiece } from './types';
 
 const REKA_API_KEY = process.env.REKA_API_KEY || '';
 const REKA_BASE_URL = 'https://api.reka.ai/v1';
-
-interface RekaVideoUploadResponse {
-  video_id: string;
-  status: string;
-}
 
 interface RekaVisionAnalysisResponse {
   outfits: Array<{
@@ -52,47 +45,18 @@ export async function downloadYouTubeVideo(youtubeUrl: string): Promise<Buffer> 
 }
 
 /**
- * Uploads a video to Reka's video upload endpoint
+ * Converts a video buffer to a base64 data URL for Reka API
  */
-export async function uploadVideoToReka(videoBuffer: Buffer, filename: string = 'video.mp4'): Promise<string> {
-  try {
-    const formData = new FormData();
-
-    // Create a readable stream from buffer
-    const stream = Readable.from(videoBuffer);
-    formData.append('file', stream, {
-      filename,
-      contentType: 'video/mp4',
-    });
-
-    const response = await fetch(`${REKA_BASE_URL}/videos/upload`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${REKA_API_KEY}`,
-        ...formData.getHeaders(),
-      },
-      body: formData as any,
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Reka upload error:', errorText);
-      throw new Error(`Failed to upload video to Reka: ${response.statusText}`);
-    }
-
-    const data: RekaVideoUploadResponse = await response.json();
-    return data.video_id;
-  } catch (error) {
-    console.error('Error uploading to Reka:', error);
-    throw new Error('Failed to upload video to Reka');
-  }
+export function convertVideoToDataUrl(videoBuffer: Buffer): string {
+  const base64Video = videoBuffer.toString('base64');
+  return `data:video/mp4;base64,${base64Video}`;
 }
 
 /**
  * Analyzes a video using Reka's Vision API to identify outfits
  */
 export async function analyzeOutfitsWithRekaVision(
-  videoId: string,
+  videoDataUrl: string,
   characterName: string
 ): Promise<Outfit[]> {
   try {
@@ -132,8 +96,8 @@ export async function analyzeOutfitsWithRekaVision(
             role: 'user',
             content: [
               {
-                type: 'video',
-                video_id: videoId,
+                type: 'video_url',
+                video_url: videoDataUrl,
               },
               {
                 type: 'text',
@@ -263,11 +227,11 @@ export async function processVideoForOutfits(
   console.log('Downloading video from YouTube...');
   const videoBuffer = await downloadYouTubeVideo(youtubeUrl);
 
-  console.log('Uploading video to Reka...');
-  const videoId = await uploadVideoToReka(videoBuffer);
+  console.log('Converting video to data URL for Reka...');
+  const videoDataUrl = convertVideoToDataUrl(videoBuffer);
 
   console.log('Analyzing outfits with Reka Vision...');
-  const outfits = await analyzeOutfitsWithRekaVision(videoId, characterName);
+  const outfits = await analyzeOutfitsWithRekaVision(videoDataUrl, characterName);
 
   console.log('Finding shopping links with Reka Research...');
   const outfitsWithLinks = await Promise.all(
