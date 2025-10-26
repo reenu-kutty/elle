@@ -1,12 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Disable Turbopack to avoid WASM bindings compatibility issues
-  // when native SWC has code signature errors on macOS
-  experimental: {
-    turbo: undefined, // Explicitly don't use turbo
-  },
-  // Force webpack mode
+  // Force webpack mode (Turbopack is disabled via package.json script)
   webpack: (config) => {
     return config;
   },
