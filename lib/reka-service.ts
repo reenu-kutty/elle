@@ -1,12 +1,17 @@
 import { Outfit, OutfitPiece } from './types';
+import OpenAI from 'openai';
 
 const REKA_API_KEY = process.env.REKA_API_KEY || '';
 const REKA_CHAT_URL = 'https://api.reka.ai/v1';
 const REKA_VISION_URL = 'https://vision-agent.api.reka.ai';
 
+const rekaClient = new OpenAI({
+  baseURL: 'https://api.reka.ai/v1',
+  apiKey: process.env.REKA_API_KEY || '',
+});
+
 interface RekaVisionAnalysisResponse {
   outfits: Array<{
-    description: string;
     timestamp: number;
     pieces: Array<{
       name: string;
@@ -20,18 +25,17 @@ interface RekaVisionAnalysisResponse {
  */
 export async function uploadVideoToReka(youtubeUrl: string): Promise<string> {
   try {
-    const formData = new URLSearchParams();
+    const formData = new FormData();
     formData.append('video_url', youtubeUrl);
-    formData.append('video_name', 'youtube_video.mp4');
+    formData.append('video_name', 'youtube_video1.mp4');
     formData.append('index', 'true');
 
     const response = await fetch(`${REKA_VISION_URL}/videos/upload`, {
       method: 'POST',
       headers: {
         'X-Api-Key': REKA_API_KEY,
-        'Content-Type': 'application/x-www-form-urlencoded',
       },
-      body: formData.toString(),
+      body: formData,
     });
 
     if (!response.ok) {
@@ -55,6 +59,35 @@ export async function uploadVideoToReka(youtubeUrl: string): Promise<string> {
   }
 }
 
+
+export async function checkUploadStatus(videoId: string): Promise<string> {
+  try {
+    const response = await fetch(`${REKA_VISION_URL}/videos/get`, {
+      method: 'POST',
+      headers: {
+        'X-Api-Key': REKA_API_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: `{"video_ids":["${videoId}"]}`,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Upload status check error:', errorText);
+      throw new Error(`Failed to check upload status: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    console.log(data.results)
+
+    return data.results[0].indexing_status;
+  } catch (error) {
+    console.error('Error checking upload status:', error);
+    throw error;
+  }
+}
+
+
 /**
  * Analyzes a video using Reka's Vision API to identify outfits
  */
@@ -63,54 +96,63 @@ export async function analyzeOutfitsWithRekaVision(
   characterName: string
 ): Promise<Outfit[]> {
   try {
-    const prompt = `Analyze this video and identify all distinct outfits worn by ${characterName}.
-    For each outfit:
-    1. Provide a detailed description of the complete outfit
-    2. List each clothing item and accessory piece with detailed descriptions
-    3. Note the approximate timestamp when this outfit appears
+    // const prompt = `Analyze this video and identify all distinct outfits worn by ${characterName}.
+    // For each outfit:
+    // 1. List each clothing item and accessory piece with detailed descriptions
+    // 2. Note the approximate timestamp when this outfit appears
+    //
+    // Focus on identifying visually distinct outfits (ignore minor variations).
+    // Return the analysis in JSON format with this structure:
+    // {
+    //   "outfits": [
+    //     {
+    //       "timestamp": 0,
+    //       "pieces": [
+    //         {
+    //           "name": "Item name (e.g., 'White T-shirt')",
+    //           "description": "Detailed description including color, style, material if visible"
+    //         }
+    //       ]
+    //     }
+    //   ]
+    // }`;
+    //const prompt = "what was the main idea of this video?"
+    const prompt = `Analyze this video and identify THREE outfits worn by ${characterName}.
+    For it:
+    1. List each clothing item and accessory piece with detailed descriptions
+    2. Note the approximate timestamp when this outfit appears
 
-    Focus on identifying visually distinct outfits (ignore minor variations).
     Return the analysis in JSON format with this structure:
     {
       "outfits": [
         {
-          "description": "Overall outfit description",
-          "timestamp": 0,
+          "timestamp": 0, // Return as STRING in MM:SS format
           "pieces": [
             {
-              "name": "Item name (e.g., 'White T-shirt')",
-              "description": "Detailed description including color, style, material if visible"
+              "name": "Item name (e.g., 'light pink crop top with sequinned edges')",
+              "description": "Very detailed description including color, style, material if visible"
             }
           ]
         }
       ]
     }`;
 
-    const response = await fetch(`${REKA_CHAT_URL}/chat`, {
+    const response = await fetch(`${REKA_VISION_URL}/qa/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Api-Key': REKA_API_KEY,
       },
       body: JSON.stringify({
-        model: 'reka-core',
+        video_id: videoId,
         messages: [
           {
             role: 'user',
-            content: [
-              {
-                type: 'video_id',
-                video_id: videoId,
-              },
-              {
-                type: 'text',
-                text: prompt,
-              },
-            ],
+            content: prompt,
           },
-        ],
-        temperature: 0.3,
+        ]
       }),
+      signal: AbortSignal.timeout(1000000),
     });
 
     if (!response.ok) {
@@ -120,7 +162,8 @@ export async function analyzeOutfitsWithRekaVision(
     }
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || '';
+    console.log('data is :' + data.chat_response)
+    const content = data.chat_response || '';
 
     // Extract JSON from response
     const jsonMatch = content.match(/\{[\s\S]*\}/);
@@ -134,7 +177,6 @@ export async function analyzeOutfitsWithRekaVision(
     const outfits: Outfit[] = parsedData.outfits.map((outfit, index) => ({
       id: `outfit-${index}`,
       imageUrl: '', // Will be populated later with frame extraction
-      description: outfit.description,
       pieces: outfit.pieces.map(piece => ({
         name: piece.name,
         description: piece.description,
@@ -153,70 +195,67 @@ export async function analyzeOutfitsWithRekaVision(
  * Uses Reka's Research API to find shopping links for outfit pieces
  */
 export async function findShoppingLinksWithRekaResearch(
-  outfitPieces: OutfitPiece[]
+    outfitPieces: OutfitPiece[]
 ): Promise<OutfitPiece[]> {
   try {
     const updatedPieces = await Promise.all(
-      outfitPieces.map(async (piece) => {
-        try {
-          const searchQuery = `Shop for ${piece.name}: ${piece.description}`;
+        outfitPieces.map(async (piece) => {
+          try {
+            const searchQuery = `Find shopping links for: ${piece.name} - ${piece.description}
+          
+Please provide:
+- Direct shopping links from reputable retailers
+- Product URLs that match this item description
+- Links from stores like Amazon, Nordstrom, ASOS, Zara, etc.
 
-          const response = await fetch(`${REKA_CHAT_URL}/chat`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Api-Key': REKA_API_KEY,
-            },
-            body: JSON.stringify({
-              model: 'reka-core',
+Return the best shopping link found.`;
+
+            const completion = await rekaClient.chat.completions.create({
+              model: 'reka-flash-research',
               messages: [
                 {
                   role: 'user',
                   content: searchQuery,
                 },
               ],
-              research_mode: 'extended',
-              temperature: 0.3,
-            }),
-          });
+            });
 
-          if (!response.ok) {
-            console.error(`Failed to find shopping link for ${piece.name}`);
+            const content = completion.choices?.[0]?.message?.content || '';
+
+            // Extract URLs from the response content
+            const urlRegex = /https?:\/\/[^\s<>"]+/g;
+            const urls = content.match(urlRegex) || [];
+
+            // Filter for shopping links
+            const shoppingLink = urls.find((url) =>
+                url.includes('amazon.com') ||
+                url.includes('shop') ||
+                url.includes('store') ||
+                url.includes('ebay.com') ||
+                url.includes('nordstrom.com') ||
+                url.includes('asos.com') ||
+                url.includes('zara.com') ||
+                url.includes('hm.com') ||
+                url.includes('product') ||
+                url.includes('/dp/') || // Amazon product pages
+                url.includes('/p/') // Generic product pages
+            );
+
+            return {
+              ...piece,
+              shoppingLink: shoppingLink || undefined,
+            };
+          } catch (error) {
+            console.error(`Error finding shopping link for ${piece.name}:`, error);
             return piece;
           }
-
-          const data = await response.json();
-
-          // Extract shopping links from the research results
-          const content = data.choices?.[0]?.message?.content || '';
-          const sources = data.choices?.[0]?.message?.sources || [];
-
-          // Try to find a shopping link from sources
-          const shoppingLink = sources.find((source: any) =>
-            source.url && (
-              source.url.includes('shop') ||
-              source.url.includes('store') ||
-              source.url.includes('amazon') ||
-              source.url.includes('ebay') ||
-              source.url.includes('.com')
-            )
-          )?.url;
-
-          return {
-            ...piece,
-            shoppingLink: shoppingLink || undefined,
-          };
-        } catch (error) {
-          console.error(`Error finding shopping link for ${piece.name}:`, error);
-          return piece;
-        }
-      })
+        })
     );
 
     return updatedPieces;
   } catch (error) {
     console.error('Error finding shopping links:', error);
-    return outfitPieces; // Return original pieces if research fails
+    return outfitPieces;
   }
 }
 
@@ -229,6 +268,22 @@ export async function processVideoForOutfits(
 ): Promise<Outfit[]> {
   console.log('Uploading YouTube URL to Reka Vision Agent...');
   const videoId = await uploadVideoToReka(youtubeUrl);
+
+  // Checking whether the video has been indexed for QA
+  let uploadStatus = await checkUploadStatus(videoId);
+
+  while (uploadStatus !== "failed" && uploadStatus !== "indexed") {
+    await new Promise(resolve => setTimeout(resolve, 1000))
+    uploadStatus = await checkUploadStatus(videoId);
+  }
+  if (uploadStatus === "failed") {
+    throw new Error('Video upload failed');
+  }
+  // else if (uploadStatus === "indexed") {
+  //   good
+  //   to
+  //   go
+  // }
 
   console.log('Analyzing outfits with Reka Vision...');
   const outfits = await analyzeOutfitsWithRekaVision(videoId, characterName);
@@ -243,6 +298,6 @@ export async function processVideoForOutfits(
       };
     })
   );
-
+  console.log(`done!`)
   return outfitsWithLinks;
 }
