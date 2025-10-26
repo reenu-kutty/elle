@@ -14,6 +14,7 @@ interface Outfit {
   imageUrl: string;
   description: string;
   pieces: OutfitPiece[];
+  timestamp: number;
 }
 
 function GalleryContent() {
