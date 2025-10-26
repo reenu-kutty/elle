@@ -7,7 +7,6 @@ export interface OutfitPiece {
 export interface Outfit {
   id: string;
   imageUrl: string;
-  description: string;
   pieces: OutfitPiece[];
 }
 

@@ -1,8 +1,10 @@
 /**
  * Fix for Next.js SWC code signature error on macOS
  *
- * This script removes the quarantine attribute from the native SWC binary
- * which can cause "code signature invalid" errors on macOS.
+ * This script fixes code signature issues with the native SWC binary on macOS by:
+ * 1. Removing quarantine attributes
+ * 2. Clearing all extended attributes
+ * 3. Re-signing with an ad-hoc signature
  */
 
 const { execSync } = require('child_process');
@@ -30,19 +32,39 @@ function fixSwcBinary() {
     return;
   }
 
+  console.log('Fixing SWC binary code signature issues...');
+
+  // Step 1: Remove quarantine attribute
   try {
-    console.log('Removing quarantine attribute from SWC binary...');
-    execSync(`xattr -d com.apple.quarantine "${swcPath}"`, {
-      stdio: 'inherit'
+    execSync(`xattr -d com.apple.quarantine "${swcPath}" 2>/dev/null`, {
+      stdio: 'pipe'
     });
-    console.log('Successfully fixed SWC binary!');
+    console.log('✓ Removed quarantine attribute');
   } catch (error) {
     // Attribute might not exist, which is fine
-    if (error.message.includes('No such xattr')) {
-      console.log('SWC binary is already clean');
-    } else {
-      console.warn('Warning: Could not remove quarantine attribute:', error.message);
-    }
+    console.log('  Quarantine attribute not present (OK)');
+  }
+
+  // Step 2: Clear all extended attributes
+  try {
+    execSync(`xattr -c "${swcPath}"`, {
+      stdio: 'pipe'
+    });
+    console.log('✓ Cleared all extended attributes');
+  } catch (error) {
+    console.log('  No extended attributes to clear (OK)');
+  }
+
+  // Step 3: Re-sign with ad-hoc signature
+  try {
+    execSync(`codesign --force --deep --sign - "${swcPath}"`, {
+      stdio: 'pipe'
+    });
+    console.log('✓ Re-signed binary with ad-hoc signature');
+    console.log('Successfully fixed SWC binary!');
+  } catch (error) {
+    console.warn('⚠ Could not re-sign binary:', error.message);
+    console.warn('  The dev server will fall back to WASM bindings (slower but functional)');
   }
 }
 
@@ -51,6 +73,7 @@ try {
   fixSwcBinary();
 } catch (error) {
   console.warn('Warning: SWC fix script encountered an error:', error.message);
+  console.warn('  The dev server will fall back to WASM bindings');
   // Don't fail the installation
   process.exit(0);
 }
