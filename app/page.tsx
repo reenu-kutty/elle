@@ -63,7 +63,7 @@ export default function Home() {
             elle
           </h1>
           <p className="text-gray-500 text-sm">
-            Discover outfits from your favorite videos
+            Discover outfits from your favorite movies
           </p>
         </div>
 

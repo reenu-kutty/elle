@@ -8,6 +8,7 @@ export interface Outfit {
   id: string;
   imageUrl: string;
   pieces: OutfitPiece[];
+  timestamp?: number;
 }
 
 export interface SessionData {

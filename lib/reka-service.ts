@@ -1,14 +1,8 @@
 import { Outfit, OutfitPiece } from './types';
-import OpenAI from 'openai';
 
 const REKA_API_KEY = process.env.REKA_API_KEY || '';
-const REKA_CHAT_URL = 'https://api.reka.ai/v1';
+const REKA_RESEARCH_URL = 'https://api.reka.ai';
 const REKA_VISION_URL = 'https://vision-agent.api.reka.ai';
-
-const rekaClient = new OpenAI({
-  baseURL: 'https://api.reka.ai/v1',
-  apiKey: process.env.REKA_API_KEY || '',
-});
 
 interface RekaVisionAnalysisResponse {
   outfits: Array<{
@@ -171,6 +165,7 @@ export async function analyzeOutfitsWithRekaVision(
       throw new Error('Could not parse outfit data from Reka response');
     }
 
+
     const parsedData: RekaVisionAnalysisResponse = JSON.parse(jsonMatch[0]);
 
     // Convert to Outfit format
@@ -182,6 +177,7 @@ export async function analyzeOutfitsWithRekaVision(
         description: piece.description,
         shoppingLink: undefined, // Will be populated by research API
       })),
+      timestamp: outfit.timestamp,
     }));
 
     return outfits;
@@ -210,36 +206,95 @@ Please provide:
 
 Return the best shopping link found.`;
 
-            const completion = await rekaClient.chat.completions.create({
-              model: 'reka-flash-research',
-              messages: [
-                {
-                  role: 'user',
-                  content: searchQuery,
+            const response = await fetch(`${REKA_RESEARCH_URL}/v1/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Api-Key': REKA_API_KEY,
                 },
-              ],
+                body: JSON.stringify({
+                    "messages": [{
+                        "role": "user",
+                        "content": searchQuery
+                    }],
+                  "model": "reka-flash-research",
+                  "response_format": {
+                    type: "json_schema",
+                    json_schema: {
+                      name: "shopping_links",
+                      strict: true,
+                      schema: {
+                        type: "object",
+                        properties: {
+                          productName: { type: "string" },
+                          links: {
+                            type: "array",
+                            items: {
+                              type: "object",
+                              properties: {
+                                url: { type: "string" },
+                                storeName: { type: "string" }
+                              },
+                              required: ["url", "storeName"],
+                              additionalProperties: false
+                            }
+                          }
+                        },
+                        required: ["productName", "links"],
+                        additionalProperties: false
+                      }
+                    }
+                  }
+                }),
+                signal: AbortSignal.timeout(1000000),
             });
 
-            const content = completion.choices?.[0]?.message?.content || '';
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('Reka Research analysis error:', errorText);
+                throw new Error(`Failed to find links with Reka Research: ${response.statusText}`);
+            }
 
-            // Extract URLs from the response content
-            const urlRegex = /https?:\/\/[^\s<>"]+/g;
-            const urls = content.match(urlRegex) || [];
+            const data = await response.json();
+            // console.log(data.choices?.[0]?.message?.content)
+            const content = data.choices?.[0]?.message?.content;
 
-            // Filter for shopping links
-            const shoppingLink = urls.find((url) =>
-                url.includes('amazon.com') ||
-                url.includes('shop') ||
-                url.includes('store') ||
-                url.includes('ebay.com') ||
-                url.includes('nordstrom.com') ||
-                url.includes('asos.com') ||
-                url.includes('zara.com') ||
-                url.includes('hm.com') ||
-                url.includes('product') ||
-                url.includes('/dp/') || // Amazon product pages
-                url.includes('/p/') // Generic product pages
-            );
+            // SCHEMA EXAMPLE FOR CONTENT:
+            //
+            // {
+            //   "productName": "Premium Matte Graduation Cap, Gown & Tassel Package",
+            //     "links": [{
+            //        "url": "https://www.graduationmall.com/products/premium-matte-graduation-cap-gown-tassel-package-12-colors-available?srsltid=AfmBOooTSXLC1fl9DPMcTKe_xoSDWHYoiQI4o6MNEsI4cpsdgcvUIaBb",
+            //        "storeName": "Graduationmall"
+            //     }]
+            //
+            // }
+
+
+            // // Extract URLs from the response content
+            // const urlRegex = /https?:\/\/[^\s<>"]+/g;
+            // const urls = content.match(urlRegex) || [];
+            //
+            // // Filter for shopping links
+            // const shoppingLink = urls.find((url: any) =>
+            //     url.includes('amazon.com') ||
+            //     url.includes('shop') ||
+            //     url.includes('store') ||
+            //     url.includes('ebay.com') ||
+            //     url.includes('nordstrom.com') ||
+            //     url.includes('asos.com') ||
+            //     url.includes('zara.com') ||
+            //     url.includes('hm.com') ||
+            //     url.includes('product') ||
+            //     url.includes('/dp/') || // Amazon product pages
+            //     url.includes('/p/') // Generic product pages
+            // );
+
+            // Parse the JSON response
+            const parsed = JSON.parse(content);
+
+            // Get the first link from the structured response
+            const shoppingLink = parsed.links?.[0]?.url || undefined;
 
             return {
               ...piece,
@@ -299,5 +354,6 @@ export async function processVideoForOutfits(
     })
   );
   console.log(`done!`)
+  console.log(outfitsWithLinks);
   return outfitsWithLinks;
 }
